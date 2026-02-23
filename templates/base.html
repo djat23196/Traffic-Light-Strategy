@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RG Candle Breakout{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav>
+        <div class="logo">RG Candle Breakout</div>
+        <div class="links">
+            <a href="/" class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="/trades" class="{% if page == 'trades' %}active{% endif %}">Trades</a>
+            <a href="/settings" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
+        </div>
+        <div class="status-badge">
+            <span class="dot" id="conn-dot"></span>
+            <span id="conn-text">Checking...</span>
+        </div>
+    </nav>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <div id="toast-container"></div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - RG Candle Breakout{% endblock %}
+{% block content %}
+
+<!-- Row 1: Price + Controls -->
+<div class="grid-2" style="margin-bottom:16px">
+    <!-- Price -->
+    <div class="card" id="price-card">
+        <h3>Spot Price</h3>
+        <div class="price-index" id="price-index">NIFTY</div>
+        <div class="price-display" id="spot-price">--</div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card">
+        <h3>Controls</h3>
+        <span class="mode-badge idle" id="mode-badge">IDLE</span>
+        <div class="controls">
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btn-scan" onclick="startScan()">Start Scan</button>
+                <button class="btn btn-green" id="btn-live" onclick="startLive()">Start Live</button>
+                <button class="btn btn-red" id="btn-stop" onclick="stopAll()" disabled>Stop</button>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="paper-toggle" checked>
+                <label for="paper-toggle">Paper Trade (no real orders)</label>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+                <div class="inline-input">
+                    <label>TF:</label>
+                    <select id="sel-tf">
+                        <option value="all">All</option>
+                        <option value="1">1m</option>
+                        <option value="5" selected>5m</option>
+                        <option value="15">15m</option>
+                    </select>
+                </div>
+                <div class="inline-input">
+                    <label>Strike:</label>
+                    <select id="sel-strike">
+                        <option value="ATM">ATM</option>
+                        <option value="OTM">OTM</option>
+                    </select>
+                </div>
+                <div class="inline-input">
+                    <label>Lots:</label>
+                    <input type="number" id="inp-lots" value="1" min="1" max="10">
+                </div>
+            </div>
+            <hr style="border-color:var(--border);margin:8px 0">
+            <div style="display:flex;gap:8px;align-items:center">
+                <div class="inline-input">
+                    <label>Backtest:</label>
+                    <input type="number" id="inp-bt-days" value="7" min="1" max="30" style="width:50px">
+                    <label>days</label>
+                </div>
+                <button class="btn btn-sm" id="btn-bt" onclick="runBacktest()">Run Backtest</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Row 2: Detected Pairs -->
+<div class="card" style="margin-bottom:16px">
+    <h3>Detected Pairs</h3>
+    <div class="tabs">
+        <div class="tab active" data-tf="1m" onclick="switchPairTab(this)">1m</div>
+        <div class="tab" data-tf="5m" onclick="switchPairTab(this)">5m</div>
+        <div class="tab" data-tf="15m" onclick="switchPairTab(this)">15m</div>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Pattern</th>
+                    <th>Range High</th>
+                    <th>Range Low</th>
+                    <th>Points</th>
+                </tr>
+            </thead>
+            <tbody id="pairs-body">
+                <tr><td colspan="5" class="empty">No pairs detected yet</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Row 3: Active Trades + Day Summary -->
+<div class="grid-2">
+    <!-- Active Trades -->
+    <div class="card">
+        <h3>Active Trades</h3>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Dir</th>
+                        <th>Strike</th>
+                        <th>Premium</th>
+                        <th>Spot</th>
+                        <th>SL</th>
+                        <th>Symbol</th>
+                        <th>Qty</th>
+                    </tr>
+                </thead>
+                <tbody id="trades-body">
+                    <tr><td colspan="8" class="empty">No active trades</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Day Summary -->
+    <div class="card">
+        <h3>Day Summary</h3>
+        <div class="summary-grid" id="day-summary">
+            <div class="summary-item"><span class="label">Total SLs</span><span class="value" id="ds-sl">0 / 3</span></div>
+            <div class="summary-item"><span class="label">1m SLs</span><span class="value" id="ds-1m-sl">0 / 2</span></div>
+            <div class="summary-item"><span class="label">1m Trades</span><span class="value" id="ds-1m-trades">0 / 2</span></div>
+            <div class="summary-item"><span class="label">1m Status</span><span class="value" id="ds-1m-status">Active</span></div>
+            <div class="summary-item"><span class="label">Trading</span><span class="value text-green" id="ds-trading">Active</span></div>
+            <div class="summary-item"><span class="label">Total Trades</span><span class="value" id="ds-total">0</span></div>
+        </div>
+    </div>
+</div>
+
+<!-- Backtest Results (hidden by default) -->
+<div class="card" id="backtest-card" style="margin-top:16px;display:none">
+    <h3>Backtest Results</h3>
+    <div class="backtest-summary" id="bt-summary"></div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Pattern</th>
+                    <th>Dir</th>
+                    <th>Range</th>
+                    <th>Points</th>
+                    <th>Breakout</th>
+                    <th>SL Hit</th>
+                    <th>Profit</th>
+                </tr>
+            </thead>
+            <tbody id="bt-body"></tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Trade Log - RG Candle Breakout{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h3>Trade Log - Today</h3>
+    <div class="filters">
+        <span class="chip active" data-filter="all" onclick="filterTrades(this)">All</span>
+        <span class="chip" data-filter="1m" onclick="filterTrades(this)">1m</span>
+        <span class="chip" data-filter="5m" onclick="filterTrades(this)">5m</span>
+        <span class="chip" data-filter="15m" onclick="filterTrades(this)">15m</span>
+        <span style="width:16px"></span>
+        <span class="chip" data-filter="LIVE" onclick="filterTrades(this)">LIVE</span>
+        <span class="chip" data-filter="PAPER" onclick="filterTrades(this)">PAPER</span>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>TF</th>
+                    <th>Pattern</th>
+                    <th>Direction</th>
+                    <th>Range High</th>
+                    <th>Range Low</th>
+                    <th>Points</th>
+                    <th>Spot</th>
+                    <th>SL</th>
+                    <th>Premium</th>
+                    <th>Symbol</th>
+                    <th>Qty</th>
+                    <th>Mode</th>
+                </tr>
+            </thead>
+            <tbody id="trade-log-body">
+                <tr><td colspan="13" class="empty">Loading trades...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

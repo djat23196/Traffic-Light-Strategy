@@ -1,0 +1,14 @@
+[project]
+name = "rg-candle-breakout-strategy"
+version = "0.1.0"
+description = "RG Candle Breakout Strategy - Algorithmic Options Trading Bot"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fyers-apiv3>=3.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "jinja2>=3.1.0",
+]

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Settings - RG Candle Breakout{% endblock %}
+{% block content %}
+
+<div class="grid-2">
+    <!-- Trading Settings -->
+    <div class="card">
+        <h3>Trading Settings</h3>
+        <form id="settings-form" onsubmit="saveSettings(event)">
+            <div class="form-group">
+                <label>Index</label>
+                <select name="DEFAULT_INDEX" id="s-index">
+                    <option value="NIFTY">NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Capital (INR)</label>
+                <input type="number" name="CAPITAL" id="s-capital" value="100000">
+            </div>
+            <div class="form-group">
+                <label>Default Lots</label>
+                <input type="number" name="DEFAULT_LOTS" id="s-lots" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label>Default Strike</label>
+                <select name="DEFAULT_STRIKE" id="s-strike">
+                    <option value="ATM">ATM</option>
+                    <option value="OTM">OTM</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Max SLs / Day</label>
+                <input type="number" name="MAX_SL_PER_DAY" id="s-max-sl" value="3" min="1">
+            </div>
+            <div class="form-group">
+                <label>Max 1m Trades</label>
+                <input type="number" name="MAX_1MIN_TRADES" id="s-1m-trades" value="2" min="1">
+            </div>
+            <div class="form-group">
+                <label>Max 1m SLs</label>
+                <input type="number" name="MAX_1MIN_SL" id="s-1m-sl" value="2" min="1">
+            </div>
+            <div class="form-group">
+                <label>5m Max Range (pts)</label>
+                <input type="number" name="FIVE_MIN_MAX_RANGE_POINTS" id="s-5m-range" value="100" min="10">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn" onclick="resetSettings()">Reset Defaults</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Auth Status -->
+    <div class="card">
+        <h3>Authentication</h3>
+        <div class="summary-grid">
+            <div class="summary-item">
+                <span class="label">Status</span>
+                <span class="value" id="auth-status">Checking...</span>
+            </div>
+            <div class="summary-item">
+                <span class="label">Token Saved</span>
+                <span class="value" id="auth-token">--</span>
+            </div>
+            <div class="summary-item">
+                <span class="label">Expiry</span>
+                <span class="value" id="auth-expiry">--</span>
+            </div>
+        </div>
+        <div class="form-actions" style="margin-top:20px">
+            <button class="btn btn-primary" onclick="connectAuth()">Connect / Re-Auth</button>
+            <button class="btn btn-red" onclick="clearAuth()">Clear Tokens</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

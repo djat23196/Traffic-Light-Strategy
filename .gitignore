@@ -1,0 +1,41 @@
+# Tokens & credentials (NEVER commit these)
+.tokens/
+*.token
+*access_token*
+config.py                 # Contains real Fyers API credentials — use config.example.py as template
+
+# Logs (may contain API request/response data)
+*.log
+fyersApi.log
+fyersRequests.log
+
+# Virtual environment
+.venv/
+venv/
+env/
+.env
+.python-version
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# IDE
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Trade logs & backtest results (contain trade data)
+trades_*.csv
+# backtest_*.csv   # Uncomment to exclude backtest outputs

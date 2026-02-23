@@ -115,6 +115,7 @@ class Trade:
     is_active: bool = True
     is_sl_hit: bool = False
     trailing_sl_active: bool = False
+    is_paper: bool = False
     qty: int = 0
 
 @dataclass
@@ -595,8 +596,8 @@ class RGCandleBreakoutStrategy:
                     f"PnL: Rs.{trade.pnl:.2f}"
                 )
 
-                # Place exit order with broker (for live trades)
-                if trade.entry_price > 0 and self.fyers:
+                # Place exit order with broker (skip for paper trades)
+                if not trade.is_paper and trade.entry_price > 0 and self.fyers:
                     try:
                         exit_order = {
                             "symbol": trade.option_symbol,
@@ -612,6 +613,8 @@ class RGCandleBreakoutStrategy:
                         logger.info(f"Exit order: {resp}")
                     except Exception as e:
                         logger.error(f"Exit order error: {e}")
+                else:
+                    logger.info(f"[PAPER] SL exit logged — no broker order sent")
 
             # Running PnL + Trailing SL for trades still active (not SL-hit)
             if trade.is_active:
@@ -685,8 +688,8 @@ class RGCandleBreakoutStrategy:
             f"PnL: Rs.{target.pnl:.2f}"
         )
 
-        # Place exit order with broker (for live trades)
-        if target.entry_price > 0 and self.fyers:
+        # Place exit order with broker (skip for paper trades)
+        if not target.is_paper and target.entry_price > 0 and self.fyers:
             try:
                 exit_order = {
                     "symbol": target.option_symbol,
@@ -702,6 +705,8 @@ class RGCandleBreakoutStrategy:
                 logger.info(f"Manual exit order: {resp}")
             except Exception as e:
                 logger.error(f"Manual exit order error: {e}")
+        else:
+            logger.info(f"[PAPER] Manual exit logged — no broker order sent")
 
         # Clean up active list
         self.day_state.active_trades = [t for t in self.day_state.active_trades if t.is_active]
@@ -737,8 +742,8 @@ class RGCandleBreakoutStrategy:
                 f"PnL: Rs.{trade.pnl:.2f}"
             )
 
-            # Place exit order with broker
-            if trade.entry_price > 0 and self.fyers:
+            # Place exit order with broker (skip for paper trades)
+            if not trade.is_paper and trade.entry_price > 0 and self.fyers:
                 try:
                     exit_order = {
                         "symbol": trade.option_symbol,
@@ -754,6 +759,8 @@ class RGCandleBreakoutStrategy:
                     logger.info(f"Close exit order: {resp}")
                 except Exception as e:
                     logger.error(f"Close exit error: {e}")
+            else:
+                logger.info(f"[PAPER] Auto-exit logged — no broker order sent")
 
         self.day_state.active_trades = [t for t in self.day_state.active_trades if t.is_active]
         self.day_state.is_trading_stopped = True
@@ -881,6 +888,7 @@ class RGCandleBreakoutStrategy:
             entry_price=option_ltp,
             spot_price=spot_price,
             stop_loss=sl_spot,         # SL in spot terms (opposite side of range)
+            is_paper=paper,
             qty=qty,
         )
 
@@ -982,7 +990,16 @@ class RGCandleBreakoutStrategy:
     # ─── Backtest ────────────────────────────────────────────────────────
 
     def backtest(self, timeframe: Timeframe, days: int = 7) -> pd.DataFrame:
-        """Run a historical backtest of the strategy"""
+        """Run a historical backtest with full trade lifecycle simulation.
+
+        Matches live trading logic:
+        - One trade at a time (no overlapping positions)
+        - Stale breakout filter (skip if price moved >30% of range)
+        - Trailing SL (after 1R move, SL moves to breakeven)
+        - Market close auto-exit at 3:15 PM
+        - Daily SL limits (max 3 per day)
+        - 1-min specific: max 2 trades, disable after 2 SLs
+        """
         logger.info(f"Backtesting: {self.index} | {timeframe.value}m | {days} days")
 
         df = self.fetch_candles(timeframe, lookback_days=days)
@@ -992,64 +1009,213 @@ class RGCandleBreakoutStrategy:
 
         pairs = self.detect_candle_pairs(df, timeframe)
         results = []
-        day_sl_count = {}
+        day_states = {}  # per-day tracking
+
+        def get_ds(day):
+            if day not in day_states:
+                day_states[day] = {
+                    "sl_count": 0,
+                    "onemin_sl": 0,
+                    "onemin_trades": 0,
+                    "onemin_disabled": False,
+                    "stopped": False,
+                    "trade_exit_idx": -1,  # df index where active trade exits
+                }
+            return day_states[day]
 
         for pair in pairs:
-            day_key = pair.candle2_time.date()
-            if day_key not in day_sl_count:
-                day_sl_count[day_key] = 0
-            if day_sl_count[day_key] >= MAX_SL_PER_DAY:
+            day = pair.candle2_time.date()
+            ds = get_ds(day)
+
+            # Daily limits
+            if ds["stopped"]:
+                continue
+            if ds["sl_count"] >= MAX_SL_PER_DAY:
+                ds["stopped"] = True
                 continue
 
-            idx = df.index.get_loc(pair.candle2_time)
-            if idx >= len(df) - 1:
+            # 1-min specific limits
+            if timeframe == Timeframe.ONE_MIN:
+                if ds["onemin_disabled"]:
+                    continue
+                if ds["onemin_trades"] >= MAX_1MIN_TRADES:
+                    continue
+
+            pair_idx = df.index.get_loc(pair.candle2_time)
+            if pair_idx >= len(df) - 1:
                 continue
 
-            for j in range(idx + 1, min(idx + 20, len(df))):
-                candle = df.iloc[j]
+            # One-trade-at-a-time: skip if previous trade hasn't exited
+            if ds["trade_exit_idx"] >= pair_idx + 1:
+                continue
 
-                if candle['high'] > pair.range_high:
-                    sl_hit = candle['low'] < pair.range_low
-                    results.append({
-                        "date": pair.candle2_time.date(),
-                        "pair_time": pair.candle2_time.strftime("%H:%M"),
-                        "pattern": pair.pattern,
-                        "timeframe": timeframe.value + "m",
-                        "range_high": pair.range_high,
-                        "range_low": pair.range_low,
-                        "range_points": pair.range_points,
-                        "direction": "CE",
-                        "breakout_time": df.index[j].strftime("%H:%M"),
-                        "sl_hit": sl_hit,
-                        "profit_pts": candle['high'] - pair.range_high,
-                    })
-                    if sl_hit:
-                        day_sl_count[day_key] += 1
-                    break
+            # Simulate the full trade lifecycle
+            result = self._simulate_backtest_trade(df, pair, pair_idx, timeframe)
+            if result is None:
+                continue
 
-                elif candle['low'] < pair.range_low:
-                    sl_hit = candle['high'] > pair.range_high
-                    results.append({
-                        "date": pair.candle2_time.date(),
-                        "pair_time": pair.candle2_time.strftime("%H:%M"),
-                        "pattern": pair.pattern,
-                        "timeframe": timeframe.value + "m",
-                        "range_high": pair.range_high,
-                        "range_low": pair.range_low,
-                        "range_points": pair.range_points,
-                        "direction": "PE",
-                        "breakout_time": df.index[j].strftime("%H:%M"),
-                        "sl_hit": sl_hit,
-                        "profit_pts": pair.range_low - candle['low'],
-                    })
-                    if sl_hit:
-                        day_sl_count[day_key] += 1
-                    break
+            results.append(result)
+
+            # Update day state
+            ds["trade_exit_idx"] = result.pop("_exit_idx")
+
+            if timeframe == Timeframe.ONE_MIN:
+                ds["onemin_trades"] += 1
+
+            if result["exit_type"] == "SL":
+                ds["sl_count"] += 1
+                if timeframe == Timeframe.ONE_MIN:
+                    ds["onemin_sl"] += 1
+                    if ds["onemin_sl"] >= MAX_1MIN_SL:
+                        ds["onemin_disabled"] = True
+                        logger.info(f"Backtest: 1-min disabled on {day} after {MAX_1MIN_SL} SLs")
+                if ds["sl_count"] >= MAX_SL_PER_DAY:
+                    ds["stopped"] = True
+                    logger.info(f"Backtest: trading stopped on {day} after {MAX_SL_PER_DAY} SLs")
 
         results_df = pd.DataFrame(results)
         if len(results_df) > 0:
             self._print_backtest_summary(results_df, timeframe)
         return results_df
+
+    def _simulate_backtest_trade(self, df: pd.DataFrame, pair: CandlePair,
+                                  pair_idx: int, timeframe: Timeframe) -> Optional[Dict]:
+        """Simulate a single trade from pair detection through exit.
+
+        Walks candle-by-candle after the pair to find breakout, then simulates:
+        - Entry at breakout level
+        - SL at opposite side of range
+        - Trailing SL to breakeven after 1R move
+        - Market close auto-exit at 3:15 PM
+        - Stale breakout filter
+
+        Returns result dict with '_exit_idx' key, or None if no breakout.
+        """
+        day = pair.candle2_time.date()
+
+        # Scan subsequent candles for breakout
+        for j in range(pair_idx + 1, len(df)):
+            candle = df.iloc[j]
+            candle_time = df.index[j]
+
+            # Don't look past end of day
+            if candle_time.date() != day:
+                return None
+
+            # Check for breakout
+            direction = None
+            if candle['high'] > pair.range_high:
+                direction = "CE"
+            elif candle['low'] < pair.range_low:
+                direction = "PE"
+
+            if direction is None:
+                continue
+
+            # STALE BREAKOUT CHECK — use candle open as proxy for spot price
+            if direction == "CE":
+                distance_past = max(0, candle['open'] - pair.range_high)
+            else:
+                distance_past = max(0, pair.range_low - candle['open'])
+
+            max_entry_distance = max(pair.range_points * 0.3, 3)
+            if distance_past > max_entry_distance:
+                return None  # Stale breakout — skip this pair
+
+            # ── Entry established ──
+            entry_spot = pair.range_high if direction == "CE" else pair.range_low
+            original_sl = pair.range_low if direction == "CE" else pair.range_high
+            current_sl = original_sl
+            trailing_sl = False
+
+            def _make_result(exit_idx, exit_time_str, sl_hit, exit_type, profit):
+                return {
+                    "date": day,
+                    "pair_time": pair.candle2_time.strftime("%H:%M"),
+                    "pattern": pair.pattern,
+                    "timeframe": timeframe.value + "m",
+                    "range_high": pair.range_high,
+                    "range_low": pair.range_low,
+                    "range_points": pair.range_points,
+                    "direction": direction,
+                    "breakout_time": candle_time.strftime("%H:%M"),
+                    "exit_time": exit_time_str,
+                    "stop_loss": original_sl,
+                    "sl_hit": sl_hit,
+                    "trailing_sl": trailing_sl,
+                    "exit_type": exit_type,
+                    "profit_pts": round(profit, 1),
+                    "_exit_idx": exit_idx,
+                }
+
+            # Check if SL hit on the same breakout candle (worst case)
+            sl_on_entry = False
+            if direction == "CE" and candle['low'] <= current_sl:
+                sl_on_entry = True
+            elif direction == "PE" and candle['high'] >= current_sl:
+                sl_on_entry = True
+
+            if sl_on_entry:
+                return _make_result(j, candle_time.strftime("%H:%M"),
+                                    True, "SL", -pair.range_points)
+
+            # Check trailing SL trigger on entry candle
+            if direction == "CE" and candle['high'] >= pair.range_high + pair.range_points:
+                trailing_sl = True
+                current_sl = pair.range_high
+            elif direction == "PE" and candle['low'] <= pair.range_low - pair.range_points:
+                trailing_sl = True
+                current_sl = pair.range_low
+
+            # ── Walk forward candle-by-candle to simulate trade ──
+            for k in range(j + 1, len(df)):
+                tc = df.iloc[k]
+                tt = df.index[k]
+
+                # End of day (next day's candles)
+                if tt.date() != day:
+                    prev = df.iloc[k - 1]
+                    profit = (prev['close'] - entry_spot) if direction == "CE" else (entry_spot - prev['close'])
+                    return _make_result(k - 1, df.index[k - 1].strftime("%H:%M"),
+                                        False, "EOD", profit)
+
+                # Market close auto-exit at 3:15 PM
+                if tt.time() >= datetime.time(15, 15):
+                    profit = (tc['close'] - entry_spot) if direction == "CE" else (entry_spot - tc['close'])
+                    return _make_result(k, tt.strftime("%H:%M"),
+                                        False, "MARKET_CLOSE", profit)
+
+                # Check SL
+                sl_hit = False
+                if direction == "CE" and tc['low'] <= current_sl:
+                    sl_hit = True
+                elif direction == "PE" and tc['high'] >= current_sl:
+                    sl_hit = True
+
+                if sl_hit:
+                    if trailing_sl:
+                        return _make_result(k, tt.strftime("%H:%M"),
+                                            True, "TRAILING_SL", 0)
+                    else:
+                        return _make_result(k, tt.strftime("%H:%M"),
+                                            True, "SL", -pair.range_points)
+
+                # Check trailing SL trigger
+                if not trailing_sl:
+                    if direction == "CE" and tc['high'] >= pair.range_high + pair.range_points:
+                        trailing_sl = True
+                        current_sl = pair.range_high
+                    elif direction == "PE" and tc['low'] <= pair.range_low - pair.range_points:
+                        trailing_sl = True
+                        current_sl = pair.range_low
+
+            # Reached end of available data
+            last = df.iloc[-1]
+            profit = (last['close'] - entry_spot) if direction == "CE" else (entry_spot - last['close'])
+            return _make_result(len(df) - 1, df.index[-1].strftime("%H:%M"),
+                                False, "END_OF_DATA", profit)
+
+        return None  # No breakout found before end of day
 
     # ─── Reports ─────────────────────────────────────────────────────────
 
@@ -1065,6 +1231,12 @@ class RGCandleBreakoutStrategy:
         print(f"  Avg range: {df['range_points'].mean():.1f} pts")
         print(f"  Avg profit: {df['profit_pts'].mean():.1f} pts")
         print(f"  SL hit rate: {df['sl_hit'].mean()*100:.1f}%")
+        if 'exit_type' in df.columns:
+            for et, cnt in df['exit_type'].value_counts().items():
+                print(f"  {et}: {cnt}")
+        if 'trailing_sl' in df.columns:
+            tsl = df['trailing_sl'].sum()
+            print(f"  Trailing SL triggered: {int(tsl)}/{total}")
         if 'date' in df.columns:
             print(f"\n  Daily:")
             for day, g in df.groupby('date'):

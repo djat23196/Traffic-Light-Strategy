@@ -522,6 +522,8 @@ async def api_backtest(body: dict):
                 records = json.loads(results_df.to_json(orient="records"))
                 total = len(results_df)
                 wins = len(results_df[~results_df['sl_hit']])
+                trailing_count = int(results_df['trailing_sl'].sum()) if 'trailing_sl' in results_df.columns else 0
+                exit_types = results_df['exit_type'].value_counts().to_dict() if 'exit_type' in results_df.columns else {}
                 summary = {
                     "total": total,
                     "wins": wins,
@@ -530,6 +532,8 @@ async def api_backtest(body: dict):
                     "avg_range": round(float(results_df['range_points'].mean()), 1),
                     "avg_profit": round(float(results_df['profit_pts'].mean()), 1),
                     "sl_rate": round(float(results_df['sl_hit'].mean()) * 100, 1),
+                    "trailing_sl_count": trailing_count,
+                    "exit_types": exit_types,
                 }
                 publish_sse("backtest", {"status": "complete", "results": records, "summary": summary})
             else:

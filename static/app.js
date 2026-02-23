@@ -235,21 +235,44 @@ function renderBacktest(summary, results) {
         return;
     }
 
-    sumEl.innerHTML = [
+    const stats = [
         { label: "Total", value: summary.total },
         { label: "Wins", value: summary.wins, cls: "text-green" },
         { label: "Losses", value: summary.losses, cls: "text-red" },
         { label: "Win Rate", value: summary.win_rate + "%" },
         { label: "Avg Profit", value: summary.avg_profit + " pts" },
         { label: "SL Rate", value: summary.sl_rate + "%" },
-    ].map(s => `
+    ];
+    if (summary.trailing_sl_count > 0) {
+        stats.push({ label: "Trailing SL", value: summary.trailing_sl_count });
+    }
+    if (summary.exit_types) {
+        if (summary.exit_types.MARKET_CLOSE) {
+            stats.push({ label: "Mkt Close", value: summary.exit_types.MARKET_CLOSE });
+        }
+    }
+    sumEl.innerHTML = stats.map(s => `
         <div class="stat-box">
             <div class="stat-value ${s.cls || ''}">${s.value}</div>
             <div class="stat-label">${s.label}</div>
         </div>
     `).join("");
 
-    tbody.innerHTML = results.slice(0, 100).map(r => `
+    const exitCls = (et) => {
+        if (et === "SL") return "text-red";
+        if (et === "TRAILING_SL") return "text-yellow";
+        if (et === "MARKET_CLOSE") return "text-muted";
+        return "text-green";
+    };
+    const exitLabel = (et) => {
+        if (et === "SL") return "SL";
+        if (et === "TRAILING_SL") return "Trail SL";
+        if (et === "MARKET_CLOSE") return "Mkt Close";
+        if (et === "EOD") return "EOD";
+        return et || "-";
+    };
+
+    tbody.innerHTML = results.slice(0, 200).map(r => `
         <tr>
             <td>${r.date}</td>
             <td>${r.pair_time}</td>
@@ -258,8 +281,10 @@ function renderBacktest(summary, results) {
             <td>${Number(r.range_high).toFixed(1)} - ${Number(r.range_low).toFixed(1)}</td>
             <td>${Number(r.range_points).toFixed(1)}</td>
             <td>${r.breakout_time}</td>
-            <td class="${r.sl_hit ? 'text-red' : 'text-green'}">${r.sl_hit ? 'Yes' : 'No'}</td>
-            <td>${Number(r.profit_pts).toFixed(1)}</td>
+            <td>${r.exit_time || '-'}</td>
+            <td>${r.stop_loss ? Number(r.stop_loss).toFixed(1) : '-'}${r.trailing_sl ? ' ↑' : ''}</td>
+            <td class="${exitCls(r.exit_type)}">${exitLabel(r.exit_type)}</td>
+            <td class="${Number(r.profit_pts) >= 0 ? 'text-green' : 'text-red'}">${Number(r.profit_pts).toFixed(1)}</td>
         </tr>
     `).join("");
 

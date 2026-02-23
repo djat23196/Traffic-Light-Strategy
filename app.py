@@ -73,6 +73,7 @@ def trade_to_dict(trade: Trade) -> dict:
         "pnl": round(trade.pnl, 1),
         "is_active": trade.is_active,
         "is_sl_hit": trade.is_sl_hit,
+        "is_paper": trade.is_paper,
         "trailing_sl": trade.trailing_sl_active,
         "exit_price": round(trade.exit_price, 2) if trade.exit_price else 0,
         "exit_time": trade.exit_time.strftime("%H:%M:%S") if trade.exit_time else None,

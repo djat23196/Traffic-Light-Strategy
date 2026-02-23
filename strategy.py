@@ -108,7 +108,6 @@ class Trade:
     entry_price: float = 0.0   # Option premium (LTP of CE/PE)
     spot_price: float = 0.0    # Index spot price at entry
     stop_loss: float = 0.0
-    target: float = 0.0
     exit_price: float = 0.0
     exit_time: Optional[datetime.datetime] = None
     pnl: float = 0.0
@@ -804,11 +803,14 @@ class RGCandleBreakoutStrategy:
             return pairs
 
         # Get live spot price
-        quote = self.fyers.quotes(data={"symbols": self.config["spot_symbol"]})
-        if quote.get('s') != 'ok':
+        try:
+            quote = self.fyers.quotes(data={"symbols": self.config["spot_symbol"]})
+            if quote.get('s') != 'ok' or not quote.get('d'):
+                return pairs
+            spot_price = quote['d'][0]['v']['lp']
+        except Exception as e:
+            logger.error(f"Spot price fetch failed: {e}")
             return pairs
-
-        spot_price = quote['d'][0]['v']['lp']
 
         direction = self.check_breakout(latest_pair, spot_price)
         if direction is None:

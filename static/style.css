@@ -116,7 +116,7 @@ main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
 .mode-badge.backtesting { background: #4a148c; color: #ce93d8; }
 
 /* Buttons */
-btn, .btn {
+.btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -200,6 +200,8 @@ tr:hover td { background: var(--bg-hover); }
 .text-red { color: var(--red); }
 .text-dim { color: var(--text-dim); }
 .text-blue { color: var(--blue); }
+.text-yellow { color: var(--yellow); }
+.text-muted { color: var(--text-dim); }
 
 /* Tabs */
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; }

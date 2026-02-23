@@ -118,14 +118,19 @@ def format_sse(event: str, data: dict, event_id=None) -> str:
 # ── Background Workers ────────────────────────────────────────────────────
 
 def background_scan_loop():
-    """Continuously scan for pairs — no order placement."""
+    """Continuously scan for pairs — no order placement.
+
+    Price updates every 2s, pair scanning every 3rd cycle (~6s).
+    """
     strategy = app_state.strategy
     tfs = [Timeframe.ONE_MIN, Timeframe.FIVE_MIN, Timeframe.FIFTEEN_MIN]
+    cycle = 0
 
     while not app_state.stop_event.is_set():
+        # Price update every cycle (fast)
         try:
             quote = strategy.fyers.quotes(data={"symbols": strategy.config["spot_symbol"]})
-            if quote.get('s') == 'ok':
+            if quote.get('s') == 'ok' and quote.get('d'):
                 price = quote['d'][0]['v']['lp']
                 with app_state.lock:
                     app_state.current_price = price
@@ -133,19 +138,24 @@ def background_scan_loop():
         except Exception:
             pass
 
-        for tf in tfs:
-            try:
-                df = strategy.fetch_candles(tf, lookback_days=1)
-                if df is not None and len(df) >= 2:
-                    pairs = strategy.detect_candle_pairs(df, tf)
-                    key = tf.value + "m"
-                    with app_state.lock:
-                        app_state.detected_pairs[key] = [pair_to_dict(p) for p in pairs]
-                    publish_sse("pairs", {"timeframe": key, "pairs": app_state.detected_pairs[key]})
-            except Exception:
-                pass
+        # Pair scanning every 3rd cycle (slower — involves heavy API calls)
+        if cycle % 3 == 0:
+            for tf in tfs:
+                if app_state.stop_event.is_set():
+                    break
+                try:
+                    df = strategy.fetch_candles(tf, lookback_days=1)
+                    if df is not None and len(df) >= 2:
+                        pairs = strategy.detect_candle_pairs(df, tf)
+                        key = tf.value + "m"
+                        with app_state.lock:
+                            app_state.detected_pairs[key] = [pair_to_dict(p) for p in pairs]
+                        publish_sse("pairs", {"timeframe": key, "pairs": app_state.detected_pairs[key]})
+                except Exception:
+                    pass
 
-        app_state.stop_event.wait(timeout=5)
+        cycle += 1
+        app_state.stop_event.wait(timeout=2)
 
     with app_state.lock:
         app_state.mode = "idle"
@@ -154,7 +164,11 @@ def background_scan_loop():
 
 def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
                          timeframe_filter: Optional[str] = None, afternoon: bool = False):
-    """Continuously scan and trade (or paper trade)."""
+    """Continuously scan and trade (or paper trade).
+
+    Price + SL monitoring every 2s (fast loop).
+    Pair scanning every 3rd cycle (~6s) to reduce API load.
+    """
     strategy = app_state.strategy
     strategy.day_state = DayState()
 
@@ -162,6 +176,8 @@ def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
         tfs = [Timeframe(timeframe_filter)]
     else:
         tfs = [Timeframe.ONE_MIN, Timeframe.FIVE_MIN, Timeframe.FIFTEEN_MIN]
+
+    cycle = 0
 
     while not app_state.stop_event.is_set():
         now = datetime.now()
@@ -181,10 +197,10 @@ def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
             app_state.stop_event.wait(timeout=30)
             continue
 
-        # Fetch price
+        # ── Fast path: price + SL monitoring (every cycle, ~2s) ──
         try:
             quote = strategy.fyers.quotes(data={"symbols": strategy.config["spot_symbol"]})
-            if quote.get('s') == 'ok':
+            if quote.get('s') == 'ok' and quote.get('d'):
                 price = quote['d'][0]['v']['lp']
                 with app_state.lock:
                     app_state.current_price = price
@@ -192,11 +208,10 @@ def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
         except Exception:
             pass
 
-        # Monitor active trades for SL hits BEFORE scanning for new pairs
+        # Monitor active trades for SL hits every cycle (critical for fast exits)
         try:
             spot = strategy.monitor_active_trades()
             if spot is not None:
-                # Active trade was monitored — push updated trades + summary
                 publish_sse("trades", {
                     "active": [trade_to_dict(t) for t in strategy.day_state.active_trades],
                     "completed": [trade_to_dict(t) for t in strategy.day_state.completed_trades[-5:]],
@@ -205,25 +220,30 @@ def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
         except Exception as e:
             logger.error(f"Monitor error: {e}")
 
-        for tf in tfs:
-            can, _ = strategy.can_trade(tf)
-            if not can:
-                continue
-            try:
-                pairs = strategy.scan_and_trade(tf, strike_type, lots, paper=paper)
-                key = tf.value + "m"
-                with app_state.lock:
-                    app_state.detected_pairs[key] = [pair_to_dict(p) for p in pairs]
+        # ── Slow path: pair scanning (every 3rd cycle, ~6s) ──
+        if cycle % 3 == 0:
+            for tf in tfs:
+                if app_state.stop_event.is_set():
+                    break
+                can, _ = strategy.can_trade(tf)
+                if not can:
+                    continue
+                try:
+                    pairs = strategy.scan_and_trade(tf, strike_type, lots, paper=paper)
+                    key = tf.value + "m"
+                    with app_state.lock:
+                        app_state.detected_pairs[key] = [pair_to_dict(p) for p in pairs]
 
-                publish_sse("pairs", {"timeframe": key, "pairs": app_state.detected_pairs.get(key, [])})
-                publish_sse("trades", {
-                    "active": [trade_to_dict(t) for t in strategy.day_state.active_trades],
-                    "day_summary": day_state_to_dict(strategy.day_state),
-                })
-            except Exception as e:
-                publish_sse("error", {"message": f"Error on {tf.value}m: {e}"})
+                    publish_sse("pairs", {"timeframe": key, "pairs": app_state.detected_pairs.get(key, [])})
+                    publish_sse("trades", {
+                        "active": [trade_to_dict(t) for t in strategy.day_state.active_trades],
+                        "day_summary": day_state_to_dict(strategy.day_state),
+                    })
+                except Exception as e:
+                    publish_sse("error", {"message": f"Error on {tf.value}m: {e}"})
 
-        app_state.stop_event.wait(timeout=5)
+        cycle += 1
+        app_state.stop_event.wait(timeout=2)
 
     with app_state.lock:
         app_state.mode = "idle"

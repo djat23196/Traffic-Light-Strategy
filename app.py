@@ -73,6 +73,7 @@ def trade_to_dict(trade: Trade) -> dict:
         "pnl": round(trade.pnl, 1),
         "is_active": trade.is_active,
         "is_sl_hit": trade.is_sl_hit,
+        "trailing_sl": trade.trailing_sl_active,
         "exit_price": round(trade.exit_price, 2) if trade.exit_price else 0,
         "exit_time": trade.exit_time.strftime("%H:%M:%S") if trade.exit_time else None,
     }
@@ -151,7 +152,7 @@ def background_scan_loop():
 
 
 def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
-                         timeframe_filter: Optional[str] = None):
+                         timeframe_filter: Optional[str] = None, afternoon: bool = False):
     """Continuously scan and trade (or paper trade)."""
     strategy = app_state.strategy
     strategy.day_state = DayState()
@@ -165,6 +166,10 @@ def background_live_loop(paper: bool, strike_type: StrikeType, lots: int,
         now = datetime.now()
         if now.hour < 9 or (now.hour == 9 and now.minute < 15):
             app_state.stop_event.wait(timeout=10)
+            continue
+        # Afternoon mode: skip until 1:00 PM
+        if afternoon and (now.hour < 13):
+            app_state.stop_event.wait(timeout=30)
             continue
         if now.hour >= 15 and now.minute >= 25:
             publish_sse("status", {"mode": "market_closed"})
@@ -278,6 +283,7 @@ async def sse_events():
             if app_state.strategy and app_state.strategy.day_state:
                 snapshot["day_summary"] = day_state_to_dict(app_state.strategy.day_state)
                 snapshot["active_trades"] = [trade_to_dict(t) for t in app_state.strategy.day_state.active_trades]
+                snapshot["completed_trades"] = [trade_to_dict(t) for t in app_state.strategy.day_state.completed_trades]
         yield format_sse("snapshot", snapshot)
 
         last_idx = len(app_state.sse_queue)
@@ -338,6 +344,15 @@ async def api_active_trades():
         return {"trades": []}
     with app_state.lock:
         trades = [trade_to_dict(t) for t in app_state.strategy.day_state.active_trades]
+    return {"trades": trades}
+
+
+@app.get("/api/trades/completed")
+async def api_completed_trades():
+    if not app_state.strategy:
+        return {"trades": []}
+    with app_state.lock:
+        trades = [trade_to_dict(t) for t in app_state.strategy.day_state.completed_trades]
     return {"trades": trades}
 
 
@@ -439,6 +454,7 @@ async def api_start_live(body: dict):
     strike = StrikeType.ATM if body.get("strike", "ATM") == "ATM" else StrikeType.OTM
     lots = int(body.get("lots", get_config("DEFAULT_LOTS")))
     tf = body.get("timeframe", "all")
+    afternoon = body.get("afternoon", False)
 
     mode_label = "paper" if paper else "live"
     with app_state.lock:
@@ -447,10 +463,35 @@ async def api_start_live(body: dict):
     publish_sse("status", {"mode": mode_label})
     threading.Thread(
         target=background_live_loop,
-        args=(paper, strike, lots, tf),
+        args=(paper, strike, lots, tf, afternoon),
         daemon=True
     ).start()
     return {"message": f"{'Paper' if paper else 'Live'} trading started"}
+
+
+@app.post("/api/control/exit-trade")
+async def api_exit_trade(body: dict = None):
+    """Manually exit the active trade (paper or live)."""
+    if not app_state.strategy:
+        raise HTTPException(400, "Not initialized")
+    if not app_state.strategy.has_active_trade():
+        raise HTTPException(404, "No active trade to exit")
+
+    symbol = body.get("symbol") if body else None
+    with app_state.lock:
+        trade = app_state.strategy.manual_exit_trade(symbol)
+
+    if trade:
+        publish_sse("trades", {
+            "active": [trade_to_dict(t) for t in app_state.strategy.day_state.active_trades],
+            "completed": [trade_to_dict(t) for t in app_state.strategy.day_state.completed_trades[-5:]],
+            "day_summary": day_state_to_dict(app_state.strategy.day_state),
+        })
+        return {
+            "message": f"Exited {trade.direction.value} | PnL: Rs.{trade.pnl:.2f}",
+            "trade": trade_to_dict(trade),
+        }
+    raise HTTPException(404, "No matching trade found")
 
 
 @app.post("/api/control/stop")

@@ -25,6 +25,10 @@
                 <input type="checkbox" id="paper-toggle" checked>
                 <label for="paper-toggle">Paper Trade (no real orders)</label>
             </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="afternoon-toggle">
+                <label for="afternoon-toggle">Afternoon mode (start at 1 PM)</label>
+            </div>
             <div style="display:flex;gap:8px;margin-top:6px">
                 <div class="inline-input">
                     <label>TF:</label>
@@ -101,12 +105,14 @@
                         <th>Premium</th>
                         <th>Spot</th>
                         <th>SL</th>
+                        <th>PnL</th>
                         <th>Symbol</th>
                         <th>Qty</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody id="trades-body">
-                    <tr><td colspan="8" class="empty">No active trades</td></tr>
+                    <tr><td colspan="10" class="empty">No active trades</td></tr>
                 </tbody>
             </table>
         </div>
@@ -123,6 +129,30 @@
             <div class="summary-item"><span class="label">Trading</span><span class="value text-green" id="ds-trading">Active</span></div>
             <div class="summary-item"><span class="label">Total Trades</span><span class="value" id="ds-total">0</span></div>
         </div>
+    </div>
+</div>
+
+<!-- Row 4: Completed Trades -->
+<div class="card" id="completed-card" style="margin-top:16px;display:none">
+    <h3>Completed Trades</h3>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Dir</th>
+                    <th>Strike</th>
+                    <th>Entry ₹</th>
+                    <th>Exit ₹</th>
+                    <th>PnL</th>
+                    <th>SL Hit</th>
+                </tr>
+            </thead>
+            <tbody id="completed-body">
+                <tr><td colspan="8" class="empty">No completed trades</td></tr>
+            </tbody>
+        </table>
     </div>
 </div>
 

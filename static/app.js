@@ -6,6 +6,30 @@ let allTradeLog = [];
 let activeFilter = "all";
 let lastPrice = 0;
 
+// Request notification permission
+if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+}
+
+function notify(title, body, color) {
+    showToast(body, color);
+    if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body, icon: "/static/favicon.ico" });
+    }
+    // Beep sound
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = color === "red" ? 300 : 800;
+        gain.gain.value = 0.1;
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+    } catch(e) {}
+}
+
 // ── SSE Connection ───────────────────────────────────────────────────────
 
 const evtSource = new EventSource("/api/events");
@@ -21,6 +45,7 @@ evtSource.addEventListener("snapshot", (e) => {
     }
     if (d.day_summary) renderDaySummary(d.day_summary);
     if (d.active_trades) renderActiveTrades(d.active_trades);
+    if (d.completed_trades) renderCompletedTrades(d.completed_trades);
 });
 
 evtSource.addEventListener("price", (e) => {
@@ -37,7 +62,15 @@ evtSource.addEventListener("pairs", (e) => {
 evtSource.addEventListener("trades", (e) => {
     const d = JSON.parse(e.data);
     if (d.active) renderActiveTrades(d.active);
+    if (d.completed) renderCompletedTrades(d.completed);
     if (d.day_summary) renderDaySummary(d.day_summary);
+    // Notify on SL hit
+    if (d.completed && d.completed.length > 0) {
+        const latest = d.completed[d.completed.length - 1];
+        if (latest.is_sl_hit) {
+            notify("SL Hit!", `${latest.direction === 'CALL' ? 'CE' : 'PE'} SL hit | PnL: ₹${latest.pnl.toFixed(0)}`, "red");
+        }
+    }
 });
 
 evtSource.addEventListener("status", (e) => {
@@ -131,7 +164,7 @@ function renderActiveTrades(trades) {
     const tbody = document.getElementById("trades-body");
     if (!tbody) return;
     if (!trades || trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty">No active trades</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No active trades</td></tr>';
         return;
     }
     tbody.innerHTML = trades.map(t => `
@@ -141,9 +174,34 @@ function renderActiveTrades(trades) {
             <td>${t.strike_price}</td>
             <td>\u20B9${t.entry_price.toFixed(2)}</td>
             <td>${t.spot_price}</td>
-            <td class="text-red">${t.stop_loss}</td>
+            <td class="text-red">${t.stop_loss}${t.trailing_sl ? ' ↑' : ''}</td>
+            <td class="${t.pnl >= 0 ? 'text-green' : 'text-red'}">₹${t.pnl.toFixed(0)}</td>
             <td class="text-dim" style="font-size:11px">${t.option_symbol}</td>
             <td>${t.qty}</td>
+            <td><button class="btn btn-red btn-sm" onclick="exitTrade('${t.option_symbol}')">Exit</button></td>
+        </tr>
+    `).join("");
+}
+
+function renderCompletedTrades(trades) {
+    const card = document.getElementById("completed-card");
+    const tbody = document.getElementById("completed-body");
+    if (!tbody || !card) return;
+    if (!trades || trades.length === 0) {
+        card.style.display = "none";
+        return;
+    }
+    card.style.display = "block";
+    tbody.innerHTML = trades.map(t => `
+        <tr>
+            <td>${t.entry_time}</td>
+            <td>${t.exit_time || '--'}</td>
+            <td class="${t.direction === 'CALL' ? 'text-green' : 'text-red'}">${t.direction === 'CALL' ? 'CE' : 'PE'}</td>
+            <td>${t.strike_price}</td>
+            <td>\u20B9${t.entry_price.toFixed(2)}</td>
+            <td>\u20B9${(t.exit_price || 0).toFixed(2)}</td>
+            <td class="${t.pnl >= 0 ? 'text-green' : 'text-red'}">\u20B9${t.pnl.toFixed(0)}</td>
+            <td class="${t.is_sl_hit ? 'text-red' : 'text-green'}">${t.is_sl_hit ? 'Yes' : 'No'}</td>
         </tr>
     `).join("");
 }
@@ -231,11 +289,12 @@ async function startLive() {
     const strike = document.getElementById("sel-strike")?.value || "ATM";
     const lots = parseInt(document.getElementById("inp-lots")?.value || "1");
     const tf = document.getElementById("sel-tf")?.value || "all";
+    const afternoon = document.getElementById("afternoon-toggle")?.checked ?? false;
 
     const res = await fetch("/api/control/start-live", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paper, strike, lots, timeframe: tf }),
+        body: JSON.stringify({ paper, strike, lots, timeframe: tf, afternoon }),
     });
     const data = await res.json();
     if (!res.ok) showToast(data.detail || "Error", "red");
@@ -245,6 +304,20 @@ async function startLive() {
 async function stopAll() {
     await fetch("/api/control/stop", { method: "POST" });
     showToast("Stop signal sent", "blue");
+}
+
+async function exitTrade(symbol) {
+    if (!confirm("Exit this trade now?")) return;
+    const res = await fetch("/api/control/exit-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol }),
+    });
+    const data = await res.json();
+    if (!res.ok) showToast(data.detail || "Exit failed", "red");
+    else {
+        notify("Trade Exited", data.message, data.trade?.pnl >= 0 ? "green" : "red");
+    }
 }
 
 async function runBacktest() {

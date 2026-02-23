@@ -114,6 +114,7 @@ class Trade:
     pnl: float = 0.0
     is_active: bool = True
     is_sl_hit: bool = False
+    trailing_sl_active: bool = False
     qty: int = 0
 
 @dataclass
@@ -542,6 +543,12 @@ class RGCandleBreakoutStrategy:
         - Record SL hit for daily limit tracking
         - Move trade to completed list
         """
+        # Market close auto-exit (3:15 PM)
+        now = datetime.datetime.now()
+        if now.hour >= 15 and now.minute >= 15:
+            self._auto_exit_all_trades()
+            return None
+
         if not self.has_active_trade():
             return None
 
@@ -606,10 +613,150 @@ class RGCandleBreakoutStrategy:
                     except Exception as e:
                         logger.error(f"Exit order error: {e}")
 
+            # Running PnL + Trailing SL for trades still active (not SL-hit)
+            if trade.is_active:
+                # Fetch unrealized PnL
+                try:
+                    opt_quote = self.fyers.quotes(data={"symbols": trade.option_symbol})
+                    if opt_quote.get('s') == 'ok' and 'd' in opt_quote:
+                        current_opt_ltp = opt_quote['d'][0].get('v', {}).get('lp', 0.0)
+                        trade.exit_price = current_opt_ltp  # for display; overwritten on actual exit
+                        trade.pnl = (current_opt_ltp - trade.entry_price) * trade.qty
+                except Exception:
+                    pass
+
+                # Trailing SL: move SL to breakeven after 1R move in favor
+                if not trade.trailing_sl_active:
+                    if trade.direction == TradeDirection.CE:
+                        if spot_price >= trade.pair.range_high + trade.pair.range_points:
+                            trade.stop_loss = trade.pair.range_high
+                            trade.trailing_sl_active = True
+                            logger.info(
+                                f"Trailing SL: moved to {trade.pair.range_high:.1f} (breakeven)"
+                            )
+                    elif trade.direction == TradeDirection.PE:
+                        if spot_price <= trade.pair.range_low - trade.pair.range_points:
+                            trade.stop_loss = trade.pair.range_low
+                            trade.trailing_sl_active = True
+                            logger.info(
+                                f"Trailing SL: moved to {trade.pair.range_low:.1f} (breakeven)"
+                            )
+
         # Clean up: remove completed trades from active list
         self.day_state.active_trades = [t for t in self.day_state.active_trades if t.is_active]
 
         return spot_price
+
+    def manual_exit_trade(self, option_symbol: str = None) -> Optional[Trade]:
+        """Manually exit an active trade. If no symbol given, exits the first active trade.
+
+        Works for both paper and live — places sell order for live trades.
+        Returns the exited Trade or None.
+        """
+        target = None
+        for trade in self.day_state.active_trades:
+            if not trade.is_active:
+                continue
+            if option_symbol is None or trade.option_symbol == option_symbol:
+                target = trade
+                break
+
+        if target is None:
+            logger.info("Manual exit: no matching active trade found")
+            return None
+
+        target.is_active = False
+        target.exit_time = datetime.datetime.now()
+
+        # Fetch current option premium for PnL
+        try:
+            opt_quote = self.fyers.quotes(data={"symbols": target.option_symbol})
+            if opt_quote.get('s') == 'ok' and 'd' in opt_quote:
+                target.exit_price = opt_quote['d'][0].get('v', {}).get('lp', 0.0)
+        except Exception:
+            pass
+
+        target.pnl = (target.exit_price - target.entry_price) * target.qty
+        self.day_state.completed_trades.append(target)
+
+        logger.info(
+            f"MANUAL EXIT: {target.direction.value} | {target.option_symbol} | "
+            f"Entry: Rs.{target.entry_price:.2f} → Exit: Rs.{target.exit_price:.2f} | "
+            f"PnL: Rs.{target.pnl:.2f}"
+        )
+
+        # Place exit order with broker (for live trades)
+        if target.entry_price > 0 and self.fyers:
+            try:
+                exit_order = {
+                    "symbol": target.option_symbol,
+                    "qty": target.qty,
+                    "type": 2,
+                    "side": -1,
+                    "productType": "INTRADAY",
+                    "limitPrice": 0, "stopPrice": 0,
+                    "validity": "DAY", "disclosedQty": 0,
+                    "offlineOrder": False,
+                }
+                resp = self.fyers.place_order(data=exit_order)
+                logger.info(f"Manual exit order: {resp}")
+            except Exception as e:
+                logger.error(f"Manual exit order error: {e}")
+
+        # Clean up active list
+        self.day_state.active_trades = [t for t in self.day_state.active_trades if t.is_active]
+        return target
+
+    def _auto_exit_all_trades(self):
+        """Square off all open positions at market close (3:15 PM)."""
+        if not any(t.is_active for t in self.day_state.active_trades):
+            return
+
+        logger.warning("MARKET CLOSE — squaring off all active trades")
+
+        for trade in self.day_state.active_trades:
+            if not trade.is_active:
+                continue
+            trade.is_active = False
+            trade.exit_time = datetime.datetime.now()
+
+            # Fetch final option premium
+            try:
+                opt_quote = self.fyers.quotes(data={"symbols": trade.option_symbol})
+                if opt_quote.get('s') == 'ok' and 'd' in opt_quote:
+                    trade.exit_price = opt_quote['d'][0].get('v', {}).get('lp', 0.0)
+            except Exception:
+                pass
+
+            trade.pnl = (trade.exit_price - trade.entry_price) * trade.qty
+            self.day_state.completed_trades.append(trade)
+
+            logger.info(
+                f"AUTO-EXIT: {trade.direction.value} | {trade.option_symbol} | "
+                f"Entry: Rs.{trade.entry_price:.2f} → Exit: Rs.{trade.exit_price:.2f} | "
+                f"PnL: Rs.{trade.pnl:.2f}"
+            )
+
+            # Place exit order with broker
+            if trade.entry_price > 0 and self.fyers:
+                try:
+                    exit_order = {
+                        "symbol": trade.option_symbol,
+                        "qty": trade.qty,
+                        "type": 2,
+                        "side": -1,
+                        "productType": "INTRADAY",
+                        "limitPrice": 0, "stopPrice": 0,
+                        "validity": "DAY", "disclosedQty": 0,
+                        "offlineOrder": False,
+                    }
+                    resp = self.fyers.place_order(data=exit_order)
+                    logger.info(f"Close exit order: {resp}")
+                except Exception as e:
+                    logger.error(f"Close exit error: {e}")
+
+        self.day_state.active_trades = [t for t in self.day_state.active_trades if t.is_active]
+        self.day_state.is_trading_stopped = True
 
     def scan_and_trade(self, timeframe: Timeframe,
                        strike_type: StrikeType = StrikeType.ATM,
@@ -664,6 +811,23 @@ class RGCandleBreakoutStrategy:
             )
             return pairs
 
+        # STALE BREAKOUT CHECK: skip if price has already moved too far beyond the range
+        # Max entry distance = 30% of the range (min 3 pts) — must catch the move early
+        if direction == TradeDirection.CE:
+            distance_past = spot_price - latest_pair.range_high
+        else:
+            distance_past = latest_pair.range_low - spot_price
+
+        max_entry_distance = max(latest_pair.range_points * 0.3, 3)
+        if distance_past > max_entry_distance:
+            logger.warning(
+                f"STALE BREAKOUT — skipping {direction.value}. "
+                f"Spot {spot_price:.1f} is {distance_past:.1f} pts past range "
+                f"(max allowed: {max_entry_distance:.1f} pts). Move already happened."
+            )
+            self.day_state.traded_pairs.add(pair_key)
+            return pairs
+
         # SL = opposite side of the pair range
         if direction == TradeDirection.CE:
             sl_spot = latest_pair.range_low
@@ -690,6 +854,18 @@ class RGCandleBreakoutStrategy:
                 quote_data = opt_quote['d'][0].get('v', {})
                 option_ltp = quote_data.get('lp', 0.0)
                 logger.info(f"Option LTP: {symbol} = Rs.{option_ltp:.2f}")
+
+                # Validate premium range per strategy rules
+                if strike_type == StrikeType.ATM and (option_ltp < 100 or option_ltp > 400):
+                    logger.warning(
+                        f"ATM premium Rs.{option_ltp:.2f} outside ideal range (Rs.100-400). "
+                        f"Consider adjusting strike."
+                    )
+                elif strike_type == StrikeType.OTM and (option_ltp < 30 or option_ltp > 200):
+                    logger.warning(
+                        f"OTM premium Rs.{option_ltp:.2f} outside ideal range (Rs.30-200). "
+                        f"Consider adjusting strike."
+                    )
             else:
                 logger.warning(f"Could not fetch option LTP for {symbol}: {opt_quote.get('message', 'unknown error')}")
         except Exception as e:

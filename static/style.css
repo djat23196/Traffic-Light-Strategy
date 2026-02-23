@@ -325,3 +325,9 @@ tr:hover td { background: var(--bg-hover); }
 @keyframes pulse-red { 0% { background: transparent; } 50% { background: #ff174415; } 100% { background: transparent; } }
 .pulse-up { animation: pulse-green 0.6s; }
 .pulse-down { animation: pulse-red 0.6s; }
+
+/* Completed trades card */
+#completed-card { animation: fadeIn 0.3s ease; }
+
+/* Trailing SL indicator */
+.trailing-indicator { color: var(--yellow, #f0ad4e); font-weight: bold; }
